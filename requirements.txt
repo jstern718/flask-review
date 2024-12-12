@@ -3,7 +3,7 @@ click==8.1.7
 coverage==7.6.9
 Cython==0.29.37
 Flask==3.1.0
-flaskr @ file:///Users/jstern/my_projects/flaskPillow
+flaskr @ file:///flaskr
 gunicorn==23.0.0
 iniconfig==2.0.0
 itsdangerous==2.2.0
