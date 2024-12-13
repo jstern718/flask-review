@@ -1,27 +1,22 @@
 import os
 from dotenv import load_dotenv
 
-from flask import Flask, flash, g, redirect, render_template, request, url_for
+from flask import Flask, flash, g, redirect, render_template, request, url_for, current_app, Blueprint, session
 from werkzeug.exceptions import abort
+from werkzeug.security import check_password_hash, generate_password_hash
 
-from flaskr.auth import login_required
-from flaskr.db import get_db
+import sqlite3
+from datetime import datetime
+import click
+from functools import wraps
 
 load_dotenv()  # Load environment variables from .env file
 
 # create and configure the app
 app = Flask(__name__, instance_relative_config=True)
 
-app.config['secret_key']=os.environ('SECRET_KEY'),
-app.config['DATABASE']=os.path.join(app.instance_path, 'flaskr.sqlite'),
-)
-
-if test_config is None:
-    # load the instance config, if it exists, when not testing
-    app.config.from_pyfile('config.py', silent=True)
-else:
-    # load the test config if passed in
-    app.config.from_mapping(test_config)
+app.config['SECRET_KEY']=os.environ.get('SECRET_KEY', 'default_secret_key')
+app.config['DATABASE']=os.path.join(app.instance_path, 'sqlite.db')
 
 # ensure the instance folder exists
 try:
@@ -29,17 +24,141 @@ try:
 except OSError:
     pass
 
-from .flaskr import db
-db.init_app(app)
+# from db.py
 
-from .flaskr import auth
-app.register_blueprint(auth.bp)
+def get_db():
+    if 'db' not in g:
+        g.db = sqlite3.connect(
+            current_app.config['DATABASE'],
+            detect_types=sqlite3.PARSE_DECLTYPES
+        )
+        g.db.row_factory = sqlite3.Row
 
-from .flaskr import blog
-app.register_blueprint(blog.bp)
-app.add_url_rule('/', endpoint='index')
+    return g.db
 
-    # a simple page that says hello
+
+def close_db(e=None):
+    db = g.pop('db', None)
+
+    if db is not None:
+        db.close()
+
+def init_db():
+    db = get_db()
+
+    with current_app.open_resource('schema.sql') as f:
+        db.executescript(f.read().decode('utf8'))
+
+
+@click.command('init-db')
+def init_db_command():
+    """Clear the existing data and create new tables."""
+    init_db()
+    click.echo('Initialized the database.')
+
+
+sqlite3.register_converter(
+    "timestamp", lambda v: datetime.fromisoformat(v.decode())
+)
+
+def init_app(app):
+    app.teardown_appcontext(close_db)
+    app.cli.add_command(init_db_command)
+
+init_app(app)
+
+
+# from auth.py
+
+bp = Blueprint('auth', __name__, url_prefix='/auth')
+
+@bp.route('/register', methods=('GET', 'POST'))
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        db = get_db()
+        error = None
+
+        if not username:
+            error = 'Username is required.'
+        elif not password:
+            error = 'Password is required.'
+
+        if error is None:
+            try:
+                db.execute(
+                    "INSERT INTO user (username, password) VALUES (?, ?)",
+                    (username, generate_password_hash(password)),
+                )
+                db.commit()
+            except db.IntegrityError:
+                error = f"User {username} is already registered."
+            else:
+                return redirect(url_for("auth.login"))
+
+        flash(error)
+
+    return render_template('auth/register.html')
+
+
+@bp.route('/login', methods=('GET', 'POST'))
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        db = get_db()
+        error = None
+        user = db.execute(
+            'SELECT * FROM user WHERE username = ?', (username,)
+        ).fetchone()
+
+        if user is None:
+            error = 'Incorrect username.'
+        elif not check_password_hash(user['password'], password):
+            error = 'Incorrect password.'
+
+        if error is None:
+            session.clear()
+            session['user_id'] = user['id']
+            return redirect(url_for('index'))
+
+        flash(error)
+
+    return render_template('auth/login.html')
+
+
+@bp.before_app_request
+def load_logged_in_user():
+    user_id = session.get('user_id')
+
+    if user_id is None:
+        g.user = None
+    else:
+        g.user = get_db().execute(
+            'SELECT * FROM user WHERE id = ?', (user_id,)
+        ).fetchone()
+
+
+@bp.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('index'))
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped_view(**kwargs):
+        if g.user is None:
+            return redirect(url_for('auth.login'))
+
+        return view(**kwargs)
+
+    return wrapped_view
+
+app.register_blueprint(bp)
+
+# a simple page that says hello
 @app.route('/hello')
 def hello():
     return 'Hello, World!'
@@ -78,7 +197,7 @@ def create():
             db.commit()
             return redirect(url_for('index'))
 
-    return render_template('blog/create.html')
+    return render_template('create.html')
 
 
 def get_post(id, check_author=True):
@@ -123,7 +242,7 @@ def update(id):
             db.commit()
             return redirect(url_for('index'))
 
-    return render_template('blog/update.html', post=post)
+    return render_template('update.html', post=post)
 
 
 @app.route('/<int:id>/delete', methods=('POST',))
