@@ -4,6 +4,20 @@ version = "1.0.0"
 description = "Pillow review website."
 dependencies = [
     "flask",
+    "python-dotenv",
+    "gunicorn",
+    "click",
+    "blinker",
+    "coverage",
+    "Cython",
+    "itsdangerous",
+    "Jinja2",
+    "MarkupSafe",
+    "packaging",
+    "pluggy",
+    "pyproject_hooks",
+    "pytest",
+    "PyYAML",
 ]
 
 [build-system]
